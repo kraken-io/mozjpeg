@@ -29,7 +29,9 @@
 #ifdef __aarch64__
 #include <arm_neon.h>
 #endif
-
+#ifdef __x86_64__
+#include <smmintrin.h> // SSSE 4.1
+#endif
 /* Private subobject for this module */
 
 typedef void (*forward_DCT_method_ptr) (DCTELEM *data);
@@ -720,7 +722,7 @@ forward_DCT (j_compress_ptr cinfo, jpeg_component_info *compptr,
     if (dst) {
       int i;
       if (cinfo->dct_method == JDCT_IFAST) {
-#ifdef __aarch64__
+#if defined ( __aarch64__ ) || defined ( __x86_64__ )
           static const int32_t aanscales_recip[DCTSIZE2] = {
             32768,23624,25079,27866,32768,41705,60547,118776,
             23624,17032,18081,20090,23624,30068,43651,85625,
@@ -731,6 +733,7 @@ forward_DCT (j_compress_ptr cinfo, jpeg_component_info *compptr,
             60547,43651,46341,51493,60547,77059,111871,219489,
             118776,85625,90902,101010,118776,151146,219489,430530
           };
+#ifdef __aarch64__
           int16x8_t in0, in1;
           int32x4_t work0, work1, work2, work3;
           int32x4_t scale0,scale1,scale2,scale3;
@@ -766,6 +769,49 @@ forward_DCT (j_compress_ptr cinfo, jpeg_component_info *compptr,
               vst1q_s16(d+8, in1);
               d += 16;
           }
+#else
+// x86
+          __m128i in0, in1;
+          __m128i work0, work1, work2, work3;
+          __m128i scale0,scale1,scale2,scale3;
+          __m128i round = _mm_set1_epi32(0x4000);
+          int16_t *p16 = (int16_t *)&workspace[0];
+          int32_t *p32 = (int32_t *)&aanscales_recip[0];
+          int16_t *d = &dst[bi][0];
+          for (i=0; i<4; i++)
+          {
+              in0 = _mm_loadu_si128((__m128i*)&p16[0]);
+              in1 = _mm_loadu_si128((__m128i*)&p16[8]);
+              p16 += 16;
+              scale0 = _mm_loadu_si128((__m128i*)&p32[0]);
+              scale1 = _mm_loadu_si128((__m128i*)&p32[4]);
+              scale2 = _mm_loadu_si128((__m128i*)&p32[8]);
+              scale3 = _mm_loadu_si128((__m128i*)&p32[12]);
+              p32 += 16;
+              work0 = _mm_unpacklo_epi16(in0, _mm_setzero_si128()); // widen and adjust for rounding
+              work1 = _mm_unpackhi_epi16(in0, _mm_setzero_si128());
+              work2 = _mm_unpacklo_epi16(in1, _mm_setzero_si128());
+              work3 = _mm_unpackhi_epi16(in1, _mm_setzero_si128());
+              work0 = _mm_mullo_epi32(work0, scale0); // multiply by the scaling factor
+              work1 = _mm_mullo_epi32(work1, scale1);
+              work2 = _mm_mullo_epi32(work2, scale2);
+              work3 = _mm_mullo_epi32(work3, scale3);
+              work0 = _mm_add_epi32(work0, round); // add the rounding adjustment
+              work1 = _mm_add_epi32(work1, round);
+              work2 = _mm_add_epi32(work2, round);
+              work3 = _mm_add_epi32(work3, round);
+              work0 = _mm_srli_epi32(work0, 15);
+              work1 = _mm_srli_epi32(work1, 15);
+              work2 = _mm_srli_epi32(work2, 15);
+              work3 = _mm_srli_epi32(work3, 15);
+              in0 = _mm_packs_epi32(work0, work1); // final output
+              in1 = _mm_packs_epi32(work2, work3);
+              _mm_storeu_si128((__m128i*)&d[0], in0);
+              _mm_storeu_si128((__m128i*)&d[8], in1);
+              d += 16;
+          }
+
+#endif //
 #else
         static const INT16 aanscales[DCTSIZE2] = {
           /* precomputed values scaled up by 14 bits */
