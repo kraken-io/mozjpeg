@@ -590,6 +590,153 @@ encode_mcu_DC_first (j_compress_ptr cinfo, JBLOCKROW *MCU_data)
   } \
 }
 
+#define COMPUTE_ABSVALUES_AC_FIRST_FASTER(Sl) { \
+  for (k = 0; k < Sl; k++) { \
+    temp = block[jpeg_natural_order_start[k]]; \
+    if (temp == 0) \
+      continue; \
+    /* We must apply the point transform by Al.  For AC coefficients this \
+     * is an integer division with rounding towards 0.  To do this portably \
+     * in C, we shift after obtaining the absolute value; so the code is \
+     * interwoven with finding the abs value (temp) and output bits (temp2). \
+     */ \
+    temp2 = temp >> (CHAR_BIT * sizeof(int) - 1); \
+    temp ^= temp2; \
+    temp -= temp2;              /* temp is abs value of input */ \
+    /*temp >>= Al; */               /* apply the point transform */ \
+    /* Watch out for case that nonzero coef is zero after point transform */ \
+    /*if (temp == 0) \ */ \
+    /*  continue; \ */ \
+    /* For a negative coef, want temp2 = bitwise complement of abs(coef) */ \
+    temp2 ^= temp; \
+    values[k] = temp; \
+    values[k + DCTSIZE2] = temp2; \
+    zerobits |= ((size_t)1U) << k; \
+  } \
+}
+
+#if defined( __aarch64__ ) || defined (__arm__)
+#include <arm_neon.h>
+#endif
+
+//
+// Test function for profiling
+static void ComputeAbsValuesACFirst(int count, int right_shift, const int *jpeg_zig, JCOEF *in_values, JCOEF *out_values, size_t *bits)
+{
+#ifdef OLD_WAY
+    int k;
+    JCOEF temp, temp2;
+    for (k = 0; k < count; k++) {
+      temp = in_values[jpeg_zig[k]];
+      if (temp == 0)
+        continue;
+      /* We must apply the point transform by Al.  For AC coefficients this \
+       * is an integer division with rounding towards 0.  To do this portably \
+       * in C, we shift after obtaining the absolute value; so the code is \
+       * interwoven with finding the abs value (temp) and output bits (temp2). \
+       */
+      temp2 = temp >> (CHAR_BIT * sizeof(int) - 1);
+      temp ^= temp2;
+      temp -= temp2;              /* temp is abs value of input */
+      temp >>= right_shift;                /* apply the point transform */
+      /* Watch out for case that nonzero coef is zero after point transform */
+      if (temp == 0)
+        continue;
+      /* For a negative coef, want temp2 = bitwise complement of abs(coef) */
+      temp2 ^= temp;
+      out_values[k] = temp;
+      out_values[k + DCTSIZE2] = temp2;
+      *bits |= ((size_t)1U) << k;
+    } // for k
+#else
+#if defined (__aarch64__) || defined (__arm__)
+    int16x8_t vIn, vBits, vSign, vZero, vMask;
+    int16x8_t vShift = vdupq_n_s16((int16_t)(0-right_shift));
+    int *s = (int *)jpeg_zig;
+    int i, shift = 0;
+    uint64_t bitmask;
+    static const int16_t bit_mask[] = {1,2,4,8,16,32,64,128};
+    size_t local_bits = 0;
+    vIn = vZero = vdupq_n_s16(0);
+    vMask = vld1q_s16(bit_mask);
+    for (i=0; i<count; i+=8)
+    {
+        int i0,i1,i2,i3;
+        JCOEF j0, j1, j2, j3;
+        i0 = s[0]; i1 = s[1]; i2 = s[2]; i3 = s[3];
+        j0 = in_values[i0]; j1 = in_values[i1];
+        j2 = in_values[i2]; j3 = in_values[i3];
+        vIn = vsetq_lane_s16(j0, vIn, 0);
+        vIn = vsetq_lane_s16(j1, vIn, 1);
+        vIn = vsetq_lane_s16(j2, vIn, 2);
+        vIn = vsetq_lane_s16(j3, vIn, 3);
+
+        i0 = s[4]; i1 = s[5]; i2 = s[6]; i3 = s[7];
+        j0 = in_values[i0]; j1 = in_values[i1];
+        j2 = in_values[i2]; j3 = in_values[i3];
+        vIn = vsetq_lane_s16(j0, vIn, 4);
+        vIn = vsetq_lane_s16(j1, vIn, 5);
+        vIn = vsetq_lane_s16(j2, vIn, 6);
+        vIn = vsetq_lane_s16(j3, vIn, 7);
+        s += 8;
+        
+        vSign = vcltq_s16(vIn, vZero);
+        vIn = vabsq_s16(vIn);
+        vIn = vshlq_s16(vIn, vShift);
+        vBits = vceqq_s16 (vIn, vZero); // bits will reflect non-zero terms
+        vBits = vbicq_s16(vMask, vBits);
+        vSign = veorq_s16(vIn, vSign);
+        vst1q_s16(&out_values[i], vIn);
+        vst1q_s16(&out_values[i+DCTSIZE2], vSign);
+        local_bits |= ((size_t)vaddvq_s16(vBits) << shift); // horizontal sum
+        shift += 8;
+    } // for i
+#else
+    __m128i vIn, vBits, vSign, vZero, vMask;
+    __m128i vShift = _mm_set1_epi16((int16_t)(1<<right_shift));
+    int *s = (int *)jpeg_zig;
+    int i, shift = 0;
+    uint64_t bitmask;
+    size_t local_bits = 0;
+    vIn = vZero = _mm_setzero_si128();
+    vMask = vld1q_s16(bit_mask);
+    for (i=0; i<count; i+=8)
+    {
+        int i0,i1,i2,i3;
+        JCOEF j0, j1, j2, j3, j4, j5, j6, j7;
+        i0 = s[0]; i1 = s[1]; i2 = s[2]; i3 = s[3];
+        j0 = in_values[i0]; j1 = in_values[i1];
+        j2 = in_values[i2]; j3 = in_values[i3];
+
+        i0 = s[4]; i1 = s[5]; i2 = s[6]; i3 = s[7];
+        j4 = in_values[i0]; j5 = in_values[i1];
+        j6 = in_values[i2]; j7 = in_values[i3];
+        vIn = _mm_set_epi16(j7, j6, j5, j4, j3, j2, j1, j0);
+        s += 8;
+        
+        vSign = _mm_cmplt_epi16(vIn, vZero);
+        vIn = _mm_abs_epi16(vIn);
+        vIn = _mm_div_epi16(vIn, vShift); // there is no vector shift in SSE/AVX
+        vBits = _mm_cmpeq_epi16(vIn, vZero); // bits will reflect non-zero terms
+        vSign = _mm_xor_si128(vIn, vSign);
+        _mm_storeu_si128((__m128i*)&out_values[i], vIn);
+        _mm_storeu_si128((__m128i*)&out_values[i+DCTSIZE2], vSign);
+        vBits = _mm_packus_epi16(vBits, vZero); // turn 16-bit flags into 8
+        local_bits |= ((size_t)_mm_movemask_si128(vBits) << shift);
+        shift += 8;
+    } // for i
+#endif // x64
+    // We need to fix the bit mask for possible overshoot because
+    // we sometimes gather unwanted bits with the SIMD code if the requested count
+    // is not a multiple of 8
+    bitmask = (0xffffffffffffffffU) >> (64 - count); // remove potential extra non-zero bit flags
+    local_bits &= bitmask;
+    if (*bits != local_bits)
+        local_bits |= 0;
+    *bits = local_bits;
+#endif
+}
+
 METHODDEF(void)
 encode_mcu_AC_first_prepare(const JCOEF *block,
                             const int *jpeg_natural_order_start, int Sl,
@@ -604,7 +751,12 @@ encode_mcu_AC_first_prepare(const JCOEF *block,
     Sl0 = 32;
 #endif
 
-  COMPUTE_ABSVALUES_AC_FIRST(Sl0);
+    ComputeAbsValuesACFirst(Sl0, Al, jpeg_natural_order_start, block, values, &zerobits);
+//    if (Al == 0) {
+//        COMPUTE_ABSVALUES_AC_FIRST_FASTER(Sl0);
+//    } else {
+//        COMPUTE_ABSVALUES_AC_FIRST(Sl0);
+//    }
 
   bits[0] = zerobits;
 #if SIZEOF_SIZE_T == 4

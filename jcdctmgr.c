@@ -26,6 +26,7 @@
 #include <assert.h>
 #include <math.h>
 
+
 /* Private subobject for this module */
 
 typedef void (*forward_DCT_method_ptr) (DCTELEM *data);
@@ -716,43 +717,25 @@ forward_DCT (j_compress_ptr cinfo, jpeg_component_info *compptr,
     if (dst) {
       int i;
       if (cinfo->dct_method == JDCT_IFAST) {
-          // reciprocal table of integer fractions to be
-          // multiplied instead of divided
-          static const INT32 aanscales_recip[DCTSIZE2] = {
-            32768,23624,25079,27866,32768,41705,60547,118776,
-            23624,17032,18081,20090,23624,30068,43651,85625,
-            25079,18081,19195,21328,25079,31920,46341,90902,
-            27866,20090,21328,23698,27866,35467,51493,101010,
-            32768,23624,25079,27866,32768,41705,60547,118776,
-            41705,30068,31920,35467,41705,53081,77059,151146,
-            60547,43651,46341,51493,60547,77059,111871,219489,
-            118776,85625,90902,101010,118776,151146,219489,430530
-          };
-//        static const INT16 aanscales[DCTSIZE2] = {
+        static const INT16 aanscales[DCTSIZE2] = {
           /* precomputed values scaled up by 14 bits */
-//          16384, 22725, 21407, 19266, 16384, 12873,  8867,  4520,
-//          22725, 31521, 29692, 26722, 22725, 17855, 12299,  6270,
-//          21407, 29692, 27969, 25172, 21407, 16819, 11585,  5906,
-//          19266, 26722, 25172, 22654, 19266, 15137, 10426,  5315,
-//          16384, 22725, 21407, 19266, 16384, 12873,  8867,  4520,
-//          12873, 17855, 16819, 15137, 12873, 10114,  6967,  3552,
-//          8867, 12299, 11585, 10426,  8867,  6967,  4799,  2446,
-//          4520,  6270,  5906,  5315,  4520,  3552,  2446,  1247
-//        };
+          16384, 22725, 21407, 19266, 16384, 12873,  8867,  4520,
+          22725, 31521, 29692, 26722, 22725, 17855, 12299,  6270,
+          21407, 29692, 27969, 25172, 21407, 16819, 11585,  5906,
+          19266, 26722, 25172, 22654, 19266, 15137, 10426,  5315,
+          16384, 22725, 21407, 19266, 16384, 12873,  8867,  4520,
+          12873, 17855, 16819, 15137, 12873, 10114,  6967,  3552,
+          8867, 12299, 11585, 10426,  8867,  6967,  4799,  2446,
+          4520,  6270,  5906,  5315,  4520,  3552,  2446,  1247
+        };
         
-    for (i = 0; i < DCTSIZE2; i++) {
+        for (i = 0; i < DCTSIZE2; i++) {
           int x = workspace[i];
-          int s = aanscales_recip[i];
-//          int s = aanscales[i];
-// This loop takes a significant amount of the total compression time
-// due to the conditional statement and integer divide
-//          x = (x >= 0) ? (x * 32768 + s) / (2*s) : (x * 32768 - s) / (2*s);
-// A simpler multiply-by-reciprocal algorithm accomplishes the same thing
-// with the same precision and the same rounding behavior, but is able to be
-// auto-vectorized by the compiler and speeds up compression significantly
-          x = ((x * aanscales_recip[i]) + 16384) >> 15;
-          dst[bi][i] = (INT16)x;
+          int s = aanscales[i];
+          x = (x >= 0) ? (x * 32768 + s) / (2*s) : (x * 32768 - s) / (2*s);
+          dst[bi][i] = x;
         }
+        
       } else {
         for (i = 0; i < DCTSIZE2; i++) {
           dst[bi][i] = workspace[i];
