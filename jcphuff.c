@@ -654,7 +654,7 @@ static void ComputeAbsValuesACFirst(int count, int right_shift, const int *jpeg_
     int16x8_t vShift = vdupq_n_s16((int16_t)(0-right_shift));
     int *s = (int *)jpeg_zig;
     int i, shift = 0;
-    uint64_t bitmask;
+//    uint64_t bitmask;
     static const int16_t bit_mask[] = {1,2,4,8,16,32,64,128};
     size_t local_bits = 0;
     vIn = vZero = vdupq_n_s16(0);
@@ -688,7 +688,10 @@ static void ComputeAbsValuesACFirst(int count, int right_shift, const int *jpeg_
         vSign = veorq_s16(vIn, vSign);
         vst1q_s16(&out_values[i], vIn);
         vst1q_s16(&out_values[i+DCTSIZE2], vSign);
-        local_bits |= ((size_t)vaddvq_s16(vBits) << shift); // horizontal sum
+        vBits = vpaddq_s16(vBits, vBits); // combine bits
+        vBits = vpaddq_s16(vBits, vZero);
+        vBits = vpaddq_s16(vBits, vZero); // now they're all in one int16
+        local_bits |= ((size_t)vgetq_lane_s16(vBits, 0) << shift);
         shift += 8;
     } // for i
 #else
@@ -696,7 +699,7 @@ static void ComputeAbsValuesACFirst(int count, int right_shift, const int *jpeg_
     __m128i vShift = _mm_set1_epi16((int16_t)(1<<right_shift));
     int *s = (int *)jpeg_zig;
     int i, shift = 0;
-    uint64_t bitmask;
+//    uint64_t bitmask;
     size_t local_bits = 0;
     vIn = vZero = _mm_setzero_si128();
     vMask = vld1q_s16(bit_mask);
@@ -726,13 +729,10 @@ static void ComputeAbsValuesACFirst(int count, int right_shift, const int *jpeg_
         shift += 8;
     } // for i
 #endif // x64
-    // We need to fix the bit mask for possible overshoot because
-    // we sometimes gather unwanted bits with the SIMD code if the requested count
-    // is not a multiple of 8
-    bitmask = (0xffffffffffffffffU) >> (64 - count); // remove potential extra non-zero bit flags
-    local_bits &= bitmask;
-    if (*bits != local_bits)
-        local_bits |= 0;
+    // We don't need to fix the bit mask for possible overshoot because
+    // the function which uses this 'bits' variable knows the true coefficient count
+//    bitmask = (0xffffffffffffffffU) >> (64 - count); // remove potential extra non-zero bit flags
+//    local_bits &= bitmask;
     *bits = local_bits;
 #endif
 }

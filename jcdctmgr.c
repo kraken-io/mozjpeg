@@ -26,6 +26,9 @@
 #include <assert.h>
 #include <math.h>
 
+#ifdef __aarch64__
+#include <arm_neon.h>
+#endif
 
 /* Private subobject for this module */
 
@@ -717,6 +720,20 @@ forward_DCT (j_compress_ptr cinfo, jpeg_component_info *compptr,
     if (dst) {
       int i;
       if (cinfo->dct_method == JDCT_IFAST) {
+          // reciprocal table of integer fractions to be
+          // multiplied instead of divided
+#ifndef FAST_WAY
+          static const INT32 aanscales_recip[DCTSIZE2] = {
+            32768,23624,25079,27866,32768,41705,60547,118776,
+            23624,17032,18081,20090,23624,30068,43651,85625,
+            25079,18081,19195,21328,25079,31920,46341,90902,
+            27866,20090,21328,23698,27866,35467,51493,101010,
+            32768,23624,25079,27866,32768,41705,60547,118776,
+            41705,30068,31920,35467,41705,53081,77059,151146,
+            60547,43651,46341,51493,60547,77059,111871,219489,
+            118776,85625,90902,101010,118776,151146,219489,430530
+          };
+#else
         static const INT16 aanscales[DCTSIZE2] = {
           /* precomputed values scaled up by 14 bits */
           16384, 22725, 21407, 19266, 16384, 12873,  8867,  4520,
@@ -728,14 +745,66 @@ forward_DCT (j_compress_ptr cinfo, jpeg_component_info *compptr,
           8867, 12299, 11585, 10426,  8867,  6967,  4799,  2446,
           4520,  6270,  5906,  5315,  4520,  3552,  2446,  1247
         };
-        
-        for (i = 0; i < DCTSIZE2; i++) {
-          int x = workspace[i];
+#endif
+  { 
+          DCTELEM *s = workspace;
+          INT16 *pDest = (INT16*)&dst[bi][0];
+          INT32 *pSrc = (INT32 *)&aanscales_recip[0];
+#ifdef __aarch64__
+          int16x8_t in0, in1;
+          int32x4_t work0, work1, work2, work3;
+          int32x4_t scale0,scale1,scale2,scale3;
+          int32x4_t round = vdupq_n_s32(0x4000);
+          int16_t *p16 = (int16_t *)&workspace[0];
+          int32_t *p32 = (int32_t *)&aanscales_recip[0];
+          int16_t *d = &dst[bi][0];
+          for (i=0; i<4; i++)
+          {
+              in0 = vld1q_s16(p16 + 0);
+              in1 = vld1q_s16(p16 + 8);
+              p16 += 16;
+              scale0 = vld1q_s32(p32 + 0);
+              scale1 = vld1q_s32(p32 + 4);
+              scale2 = vld1q_s32(p32 + 8);
+              scale3 = vld1q_s32(p32 + 12);
+              p32 += 16;
+              work0 = vmovl_s16(vget_low_s16(in0)); // widen and adjust for rounding
+              work1 = vmovl_s16(vget_high_s16(in0));
+              work2 = vmovl_s16(vget_low_s16(in1));
+              work3 = vmovl_s16(vget_high_s16(in1));
+              work0 = vmulq_s32(work0, scale0); // multiply by the scaling factor
+              work1 = vmulq_s32(work1, scale1);
+              work2 = vmulq_s32(work2, scale2);
+              work3 = vmulq_s32(work3, scale3);
+              work0 = vaddq_s32(work0, round); // add the rounding adjustment
+              work1 = vaddq_s32(work1, round);
+              work2 = vaddq_s32(work2, round);
+              work3 = vaddq_s32(work3, round);
+              in0 = vcombine_s16(vshrn_n_s32(work0, 15), vshrn_n_s32(work1, 15)); // final output
+              in1 = vcombine_s16(vshrn_n_s32(work2, 15), vshrn_n_s32(work3, 15));
+              vst1q_s16(d, in0);
+              vst1q_s16(d+8, in1);
+              d += 16;
+          }
+#else
+    for (i = 0; i < DCTSIZE2; i++) {
+          int x = ((*s++ * *pSrc++) + 16384) >> 15; 
+#ifndef FAST_WAY
+//          x = ((x * s) + 16384) >> 15;
+#else
           int s = aanscales[i];
           x = (x >= 0) ? (x * 32768 + s) / (2*s) : (x * 32768 - s) / (2*s);
-          dst[bi][i] = x;
+#endif
+// This loop takes a significant amount of the total compression time
+// due to the conditional statement and integer divide
+//          x = (x >= 0) ? (x * 32768 + s) / (2*s) : (x * 32768 - s) / (2*s);
+// A simpler multiply-by-reciprocal algorithm accomplishes the same thing
+// with the same precision and the same rounding behavior, but is able to be
+// auto-vectorized by the compiler and speeds up compression significantly
+          *pDest++ = (INT16)x;
         }
-        
+#endif
+       }
       } else {
         for (i = 0; i < DCTSIZE2; i++) {
           dst[bi][i] = workspace[i];
