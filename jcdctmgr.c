@@ -865,12 +865,69 @@ forward_DCT (j_compress_ptr cinfo, jpeg_component_info *compptr,
     if (do_preprocess) {
       int i;
       int maxval = (1 << MAX_COEF_BITS) - 1;
-      for (i = 0; i < 64; i++) {
+#if defined (__aarch64__) || defined (__arm__) || defined (__arm64__)
+        {
+            int16x8_t in0, in1, in2, in3;
+            int16x8_t max_x8, min_x8;
+            int16_t *s = &coef_blocks[bi][0];
+            max_x8 = vdupq_n_s16(maxval);
+            min_x8 = vdupq_n_s16(-maxval);
+            for (i=0; i<2; i++) {
+                in0 = vld1q_s16(&s[0]);
+                in1 = vld1q_s16(&s[8]);
+                in2 = vld1q_s16(&s[16]);
+                in3 = vld1q_s16(&s[24]);
+                in0 = vmaxq_s16(in0, min_x8);
+                in1 = vmaxq_s16(in1, min_x8);
+                in2 = vmaxq_s16(in2, min_x8);
+                in3 = vmaxq_s16(in3, min_x8);
+                in0 = vminq_s16(in0, max_x8);
+                in1 = vminq_s16(in1, max_x8);
+                in2 = vminq_s16(in2, max_x8);
+                in3 = vminq_s16(in3, max_x8);
+                vst1q_s16(&s[0], in0);
+                vst1q_s16(&s[8], in1);
+                vst1q_s16(&s[16], in2);
+                vst1q_s16(&s[24], in3);
+                s += 32;
+            }
+        }
+#else // x64 version
+        {
+            __m128i in0, in1, in2, in3;
+            __m128i max_x8, min_x8;
+            int16_t *s = &coef_blocks[bi][0];
+            max_x8 = _mm_set1_epi16(maxval);
+            min_x8 = _mm_set1_epi16(-maxval);
+            for (i=0; i<2; i++) {
+                in0 = _mm_loadu_si128((__m128i*)&s[0]);
+                in1 = _mm_loadu_si128((__m128i*)&s[8]);
+                in2 = _mm_loadu_si128((__m128i*)&s[16]);
+                in3 = _mm_loadu_si128((__m128i*)&s[24]);
+                in0 = _mm_max_epi16(in0, min_x8);
+                in1 = _mm_max_epi16(in1, min_x8);
+                in2 = _mm_max_epi16(in2, min_x8);
+                in3 = _mm_max_epi16(in3, min_x8);
+                in0 = _mm_min_epi16(in0, max_x8);
+                in1 = _mm_min_epi16(in1, max_x8);
+                in2 = _mm_min_epi16(in2, max_x8);
+                in3 = _mm_min_epi16(in3, max_x8);
+                _mm_storeu_si128((__m128i*)&s[0], in0);
+                _mm_storeu_si128((__m128i*)&s[8], in1);
+                _mm_storeu_si128((__m128i*)&s[16], in2);
+                _mm_storeu_si128((__m128i*)&s[24], in3);
+                s += 32;
+            }
+        }
+#endif
+#ifdef OLD_CODE
+    for (i = 0; i < 64; i++) {
         if (coef_blocks[bi][i] < -maxval)
           coef_blocks[bi][i] = -maxval;
         if (coef_blocks[bi][i] > maxval)
           coef_blocks[bi][i] = maxval;
   }
+#endif
   }
 }
 }
@@ -1236,14 +1293,19 @@ quantize_trellis(j_compress_ptr cinfo, c_derived_tbl *dctbl, c_derived_tbl *actb
       int qval;
       
       accumulated_zero_dist[i] = x * x * lambda * lambda_tbl[z] + accumulated_zero_dist[i-1];
-      
+
+        if (x < q/2) { // qval will be 0
+            coef_blocks[bi][z] = 0;
+            accumulated_cost[i] = 1e38; /* Shouldn't be needed */
+            continue;
+        }
       qval = (x + q/2) / q; /* quantized value (round nearest) */
 
-      if (qval == 0) {
-        coef_blocks[bi][z] = 0;
-        accumulated_cost[i] = 1e38; /* Shouldn't be needed */
-        continue;
-      }
+//      if (qval == 0) {
+//        coef_blocks[bi][z] = 0;
+//        accumulated_cost[i] = 1e38; /* Shouldn't be needed */
+//        continue;
+//      }
 
       if (qval >= (1<<MAX_COEF_BITS))
         qval = (1<<MAX_COEF_BITS)-1;

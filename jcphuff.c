@@ -656,7 +656,7 @@ static void ComputeAbsValuesACFirst(int count, int right_shift, const int *jpeg_
     int16x8_t vShift = vdupq_n_s16((int16_t)(0-right_shift));
     int *s = (int *)jpeg_zig;
     int i, shift = 0;
-//    uint64_t bitmask;
+    uint64_t bitmask;
     static const int16_t bit_mask[] = {1,2,4,8,16,32,64,128};
     size_t local_bits = 0;
     vIn = vZero = vdupq_n_s16(0);
@@ -754,11 +754,11 @@ encode_mcu_AC_first_prepare(const JCOEF *block,
     Sl0 = 32;
 #endif
 
-//    ComputeAbsValuesACFirst(Sl0, Al, jpeg_natural_order_start, block, values, &zerobits);
+    ComputeAbsValuesACFirst(Sl0, Al, jpeg_natural_order_start, block, values, &zerobits);
 //    if (Al == 0) {
 //        COMPUTE_ABSVALUES_AC_FIRST_FASTER(Sl0);
 //    } else {
-        COMPUTE_ABSVALUES_AC_FIRST(Sl0);
+//        COMPUTE_ABSVALUES_AC_FIRST(Sl0);
 //    }
 
   bits[0] = zerobits;
