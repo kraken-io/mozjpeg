@@ -26,8 +26,10 @@
 #include <assert.h>
 #include <math.h>
 
-#ifdef __aarch64__
+#if defined( __aarch64__ ) || defined (__arm__) || defined (__arm64__)
 #include <arm_neon.h>
+#else
+#include <immintrin.h>
 #endif
 
 /* Private subobject for this module */
@@ -787,22 +789,67 @@ forward_DCT (j_compress_ptr cinfo, jpeg_component_info *compptr,
               d += 16;
           }
 #else
-    for (i = 0; i < DCTSIZE2; i++) {
-          int x = ((*s++ * *pSrc++) + 16384) >> 15; 
-#ifndef FAST_WAY
+// C code that compiles well
+//    for (i = 0; i < DCTSIZE2; i++) {
+//          int x = ((*s++ * *pSrc++) + 16384) >> 15;
+//      *pDest++ = (INT16)x;
+//    }
+
+      __m128i in0, in1;
+      __m128i work0, work1, work2, work3;
+      __m128i scale0,scale1,scale2,scale3;
+      __m128i round = _mm_set1_epi32(0x4000);
+      int16_t *p16 = (int16_t *)&workspace[0];
+      int32_t *p32 = (int32_t *)&aanscales_recip[0];
+      int16_t *d = &dst[bi][0];
+      for (i=0; i<4; i++)
+      {
+          in0 = _mm_loadu_si128((__m128i*)&p16[0]);
+          in1 = _mm_loadu_si128((__m128i*)&p16[8]);
+          p16 += 16;
+          scale0 = _mm_loadu_si128((__m128i*)&p32[0]);
+          scale1 = _mm_loadu_si128((__m128i*)&p32[4]);
+          scale2 = _mm_loadu_si128((__m128i*)&p32[8]);
+          scale3 = _mm_loadu_si128((__m128i*)&p32[12]);
+          p32 += 16;
+          work0 = _mm_cvtepi16_epi32(in0); // widen and adjust for rounding
+          work2 = _mm_cvtepi16_epi32(in1);
+          in0 = _mm_srli_si128(in0, 8); // shift down upper half
+          in1 = _mm_srli_si128(in1, 8);
+          work1 = _mm_cvtepi16_epi32(in0);
+          work3 = _mm_cvtepi16_epi32(in1);
+          work0 = _mm_mullo_epi32(work0, scale0); // multiply by the scaling factor
+          work1 = _mm_mullo_epi32(work1, scale1);
+          work2 = _mm_mullo_epi32(work2, scale2);
+          work3 = _mm_mullo_epi32(work3, scale3);
+          work0 = _mm_add_epi32(work0, round); // add the rounding adjustment
+          work1 = _mm_add_epi32(work1, round);
+          work2 = _mm_add_epi32(work2, round);
+          work3 = _mm_add_epi32(work3, round);
+          work0 = _mm_srai_epi32(work0, 15);
+          work1 = _mm_srai_epi32(work1, 15);
+          work2 = _mm_srai_epi32(work2, 15);
+          work3 = _mm_srai_epi32(work3, 15);
+          in0 = _mm_packs_epi32(work0, work1); // final output
+          in1 = _mm_packs_epi32(work2, work3);
+          _mm_storeu_si128((__m128i*)d, in0);
+          _mm_storeu_si128((__m128i*)&d[8], in1);
+          d += 16;
+      }
+
+//#ifndef FAST_WAY
 //          x = ((x * s) + 16384) >> 15;
-#else
-          int s = aanscales[i];
-          x = (x >= 0) ? (x * 32768 + s) / (2*s) : (x * 32768 - s) / (2*s);
-#endif
+//#else
+//          int x = *s++;
+//          int s = aanscales[i];
+//          x = (x >= 0) ? (x * 32768 + s) / (2*s) : (x * 32768 - s) / (2*s);
+//#endif
 // This loop takes a significant amount of the total compression time
 // due to the conditional statement and integer divide
 //          x = (x >= 0) ? (x * 32768 + s) / (2*s) : (x * 32768 - s) / (2*s);
 // A simpler multiply-by-reciprocal algorithm accomplishes the same thing
 // with the same precision and the same rounding behavior, but is able to be
 // auto-vectorized by the compiler and speeds up compression significantly
-          *pDest++ = (INT16)x;
-        }
 #endif
        }
       } else {

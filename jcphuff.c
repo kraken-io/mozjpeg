@@ -617,11 +617,13 @@ encode_mcu_DC_first (j_compress_ptr cinfo, JBLOCKROW *MCU_data)
 
 #if defined( __aarch64__ ) || defined (__arm__)
 #include <arm_neon.h>
+#else
+#include <immintrin.h>
 #endif
 
 //
 // Test function for profiling
-static void ComputeAbsValuesACFirst(int count, int right_shift, const int *jpeg_zig, JCOEF *in_values, JCOEF *out_values, size_t *bits)
+static void ComputeAbsValuesACFirst(int count, int right_shift, const int *jpeg_zig, const JCOEF *in_values, JCOEF *out_values, size_t *bits)
 {
 #ifdef OLD_WAY
     int k;
@@ -695,14 +697,14 @@ static void ComputeAbsValuesACFirst(int count, int right_shift, const int *jpeg_
         shift += 8;
     } // for i
 #else
-    __m128i vIn, vBits, vSign, vZero, vMask;
-    __m128i vShift = _mm_set1_epi16((int16_t)(1<<right_shift));
+    __m128i vIn, vBits, vSign, vZero;
+    __m128i vShift = _mm_set1_epi16((int16_t)(1<<(3-right_shift)));
     int *s = (int *)jpeg_zig;
+//printf("oh crap!\n");
     int i, shift = 0;
-//    uint64_t bitmask;
+    uint64_t bitmask;
     size_t local_bits = 0;
     vIn = vZero = _mm_setzero_si128();
-    vMask = vld1q_s16(bit_mask);
     for (i=0; i<count; i+=8)
     {
         int i0,i1,i2,i3;
@@ -719,20 +721,21 @@ static void ComputeAbsValuesACFirst(int count, int right_shift, const int *jpeg_
         
         vSign = _mm_cmplt_epi16(vIn, vZero);
         vIn = _mm_abs_epi16(vIn);
-        vIn = _mm_div_epi16(vIn, vShift); // there is no vector shift in SSE/AVX
+        vIn = _mm_mullo_epi16(vIn, vShift); // there is no vector shift in SSE/AVX
+        vIn = _mm_srli_epi16(vIn, 3); // with the variable multiply, we can do a variable rshift
         vBits = _mm_cmpeq_epi16(vIn, vZero); // bits will reflect non-zero terms
         vSign = _mm_xor_si128(vIn, vSign);
         _mm_storeu_si128((__m128i*)&out_values[i], vIn);
         _mm_storeu_si128((__m128i*)&out_values[i+DCTSIZE2], vSign);
         vBits = _mm_packus_epi16(vBits, vZero); // turn 16-bit flags into 8
-        local_bits |= ((size_t)_mm_movemask_si128(vBits) << shift);
+        local_bits |= ((size_t)_mm_movemask_epi8(vBits) << shift);
         shift += 8;
     } // for i
 #endif // x64
     // We don't need to fix the bit mask for possible overshoot because
     // the function which uses this 'bits' variable knows the true coefficient count
-//    bitmask = (0xffffffffffffffffU) >> (64 - count); // remove potential extra non-zero bit flags
-//    local_bits &= bitmask;
+    bitmask = (0xffffffffffffffffU) >> (64 - count); // remove potential extra non-zero bit flags
+    local_bits &= bitmask;
     *bits = local_bits;
 #endif
 }
@@ -751,11 +754,11 @@ encode_mcu_AC_first_prepare(const JCOEF *block,
     Sl0 = 32;
 #endif
 
-    ComputeAbsValuesACFirst(Sl0, Al, jpeg_natural_order_start, block, values, &zerobits);
+//    ComputeAbsValuesACFirst(Sl0, Al, jpeg_natural_order_start, block, values, &zerobits);
 //    if (Al == 0) {
 //        COMPUTE_ABSVALUES_AC_FIRST_FASTER(Sl0);
 //    } else {
-//        COMPUTE_ABSVALUES_AC_FIRST(Sl0);
+        COMPUTE_ABSVALUES_AC_FIRST(Sl0);
 //    }
 
   bits[0] = zerobits;
