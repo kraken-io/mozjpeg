@@ -882,9 +882,13 @@ static int bmpTest(void)
   return 0;
 }
 
+#ifdef _WIN32
+#define setenv(envvar, value, dummy)  _putenv_s(envvar, value)
+#endif
 
 int main(int argc, char *argv[])
 {
+  setenv("TJ_REVERT", "1", 1);
   int i, num4bf = 5;
 
 #ifdef _WIN32
